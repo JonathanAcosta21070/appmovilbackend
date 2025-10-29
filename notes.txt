@@ -1,0 +1,724 @@
+//backend server.js
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// ✅ Conexión a MongoDB
+mongoose.connect("mongodb+srv://Jona:3412@cluster0.m5nt87h.mongodb.net/miAppAgricola?retryWrites=true&w=majority")
+  .then(() => console.log("✅ Conectado a MongoDB"))
+  .catch(err => console.log("❌ Error conectando a MongoDB:", err));
+
+// 🧩 ESQUEMAS
+
+// Esquema de Usuario
+const UsuarioSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  role: { type: String, enum: ['farmer', 'scientist'], default: 'farmer' },
+  cultivo: { type: String, default: '' },
+  ubicacion: { type: String, default: '' },
+  fechaRegistro: { type: Date, default: Date.now }
+}, { collection: 'users' });
+
+const Usuario = mongoose.model("Usuario", UsuarioSchema);
+
+// Esquema para Acciones Agrícolas
+const AccionSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  type: { type: String, required: true, enum: ['sowing', 'watering', 'fertilization', 'harvest', 'other'] },
+  seed: String,
+  sowingDate: Date,
+  bioFertilizer: String,
+  observations: String,
+  date: { type: Date, default: Date.now },
+  synced: { type: Boolean, default: true },
+  location: String,
+  crop: String
+}, { collection: 'agriculturalActions' });
+
+const Accion = mongoose.model("Accion", AccionSchema);
+
+// Esquema para Alertas
+const AlertaSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  title: { type: String, required: true },
+  message: { type: String, required: true },
+  type: { type: String, default: 'info', enum: ['info', 'warning', 'success', 'error'] },
+  from: { type: String, required: true },
+  date: { type: Date, default: Date.now },
+  read: { type: Boolean, default: false },
+  priority: { type: String, default: 'medium', enum: ['low', 'medium', 'high'] }
+}, { collection: 'alerts' });
+
+const Alerta = mongoose.model("Alerta", AlertaSchema);
+
+// Esquema para Datos de Sensores
+const SensorDataSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  moisture: Number,
+  temperature: Number,
+  humidity: Number,
+  ph: Number,
+  date: { type: Date, default: Date.now },
+  location: String,
+  crop: String
+}, { collection: 'sensorData' });
+
+const SensorData = mongoose.model("SensorData", SensorDataSchema);
+
+// Esquema para Cultivos
+const CultivoSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  name: { type: String, required: true },
+  type: String,
+  startDate: Date,
+  estimatedHarvest: Date,
+  location: String,
+  area: Number,
+  status: { type: String, default: 'active', enum: ['active', 'harvested', 'abandoned'] },
+  notes: String
+}, { collection: 'crops' });
+
+const Cultivo = mongoose.model("Cultivo", CultivoSchema);
+
+// 🚀 MIDDLEWARES
+
+// Middleware de autenticación
+const authenticateToken = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization;
+    if (!token) {
+      return res.status(401).json({ error: "Token de autorización requerido" });
+    }
+    // En una aplicación real, verificaríamos un JWT token
+    // Por ahora, asumimos que el token es el userId
+    req.userId = token;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: "Token inválido" });
+  }
+};
+
+// 🔐 ENDPOINTS DE AUTENTICACIÓN
+
+// LOGIN
+app.post("/api/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email y contraseña son requeridos" });
+    }
+
+    const usuario = await Usuario.findOne({ email });
+    if (!usuario) {
+      return res.status(400).json({ error: "Usuario no encontrado" });
+    }
+
+    const esValida = await bcrypt.compare(password, usuario.password);
+    if (!esValida) {
+      return res.status(400).json({ error: "Contraseña incorrecta" });
+    }
+
+    res.json({
+      mensaje: "Login exitoso",
+      usuario: {
+        id: usuario._id,
+        name: usuario.name,
+        email: usuario.email,
+        role: usuario.role,
+        cultivo: usuario.cultivo,
+        ubicacion: usuario.ubicacion
+      },
+      token: usuario._id.toString() // En producción usar JWT
+    });
+  } catch (error) {
+    console.error("❌ Error en login:", error);
+    res.status(500).json({ error: "Error en el login" });
+  }
+});
+
+// REGISTRO
+app.post("/api/registro", async (req, res) => {
+  try {
+    const { name, email, password, role, cultivo, ubicacion } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    }
+
+    const usuarioExiste = await Usuario.findOne({ email });
+    if (usuarioExiste) {
+      return res.status(400).json({ error: "El usuario ya existe" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const rolesValidos = ['farmer', 'scientist'];
+    const rolFinal = rolesValidos.includes(role) ? role : 'farmer';
+
+    const nuevoUsuario = new Usuario({
+      name,
+      email,
+      password: hashedPassword,
+      role: rolFinal,
+      cultivo: cultivo || '',
+      ubicacion: ubicacion || ''
+    });
+
+    await nuevoUsuario.save();
+
+    console.log("👤 Nuevo usuario registrado:", { name, email, role: rolFinal });
+
+    res.json({
+      mensaje: "Usuario registrado correctamente",
+      usuario: {
+        id: nuevoUsuario._id,
+        name: nuevoUsuario.name,
+        email: nuevoUsuario.email,
+        role: nuevoUsuario.role,
+        cultivo: nuevoUsuario.cultivo,
+        ubicacion: nuevoUsuario.ubicacion
+      },
+      token: nuevoUsuario._id.toString()
+    });
+  } catch (error) {
+    console.error("❌ Error en registro:", error);
+    res.status(500).json({ error: "Error al registrar usuario" });
+  }
+});
+
+// 📝 ENDPOINTS DE ACCIONES AGRÍCOLAS
+
+// OBTENER ACCIONES DEL USUARIO
+app.get("/api/actions/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit, type } = req.query;
+    
+    let query = { userId };
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+
+    let acciones = Accion.find(query).sort({ date: -1 });
+    
+    if (limit) {
+      acciones = acciones.limit(parseInt(limit));
+    }
+
+    const resultado = await acciones;
+    res.json(resultado);
+  } catch (error) {
+    console.error("❌ Error obteniendo acciones:", error);
+    res.status(500).json({ error: "Error al obtener acciones" });
+  }
+});
+
+// CREAR NUEVA ACCIÓN
+app.post("/api/actions", authenticateToken, async (req, res) => {
+  try {
+    const { userId, type, seed, sowingDate, bioFertilizer, observations, location, crop } = req.body;
+
+    if (!type) {
+      return res.status(400).json({ error: "El tipo de acción es requerido" });
+    }
+
+    const nuevaAccion = new Accion({
+      userId,
+      type,
+      seed,
+      sowingDate: sowingDate ? new Date(sowingDate) : undefined,
+      bioFertilizer,
+      observations,
+      location,
+      crop,
+      date: new Date(),
+      userEmail: userEmail, 
+      synced: true
+    });
+
+    await nuevaAccion.save();
+
+    console.log(`✅ Nueva acción registrada: ${type} para usuario ${userId}`);
+
+    res.json({
+      mensaje: "Acción registrada correctamente",
+      accion: nuevaAccion
+    });
+  } catch (error) {
+    console.error("❌ Error creando acción:", error);
+    res.status(500).json({ error: "Error al crear acción" });
+  }
+});
+
+// SINCRONIZAR ACCIONES OFFLINE
+app.post("/api/actions/sync", authenticateToken, async (req, res) => {
+  try {
+    const { actions, userId } = req.body;
+    
+    if (!Array.isArray(actions)) {
+      return res.status(400).json({ error: "Formato de acciones inválido" });
+    }
+
+    const resultados = [];
+    
+    for (const action of actions) {
+      try {
+        // Verificar si la acción ya existe (basado en fecha y tipo)
+        const accionExistente = await Accion.findOne({
+          userId,
+          type: action.type,
+          date: new Date(action.date)
+        });
+
+        if (!accionExistente) {
+          const nuevaAccion = new Accion({
+            ...action,
+            userId,
+            synced: true
+          });
+          await nuevaAccion.save();
+          resultados.push({ ...action, status: 'created', id: nuevaAccion._id });
+        } else {
+          resultados.push({ ...action, status: 'duplicate', id: accionExistente._id });
+        }
+      } catch (actionError) {
+        resultados.push({ ...action, status: 'error', error: actionError.message });
+      }
+    }
+
+    console.log(`✅ Sincronizadas ${actions.length} acciones para usuario ${userId}`);
+
+    res.json({
+      mensaje: "Sincronización completada",
+      results: resultados,
+      summary: {
+        total: actions.length,
+        created: resultados.filter(r => r.status === 'created').length,
+        duplicate: resultados.filter(r => r.status === 'duplicate').length,
+        error: resultados.filter(r => r.status === 'error').length
+      }
+    });
+  } catch (error) {
+    console.error("❌ Error sincronizando acciones:", error);
+    res.status(500).json({ error: "Error al sincronizar acciones" });
+  }
+});
+
+// 🔔 ENDPOINTS DE ALERTAS
+
+// OBTENER ALERTAS DEL USUARIO
+app.get("/api/alerts/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { unreadOnly } = req.query;
+
+    let query = { userId };
+    if (unreadOnly === 'true') {
+      query.read = false;
+    }
+
+    const alertas = await Alerta.find(query).sort({ date: -1 });
+    
+    res.json(alertas);
+  } catch (error) {
+    console.error("❌ Error obteniendo alertas:", error);
+    res.status(500).json({ error: "Error al obtener alertas" });
+  }
+});
+
+// CREAR NUEVA ALERTA (para técnicos/científicos)
+app.post("/api/alerts", authenticateToken, async (req, res) => {
+  try {
+    const { userId, title, message, type, from, priority } = req.body;
+
+    if (!title || !message || !from) {
+      return res.status(400).json({ error: "Título, mensaje y remitente son requeridos" });
+    }
+
+    const nuevaAlerta = new Alerta({
+      userId,
+      title,
+      message,
+      type: type || 'info',
+      from,
+      priority: priority || 'medium',
+      date: new Date(),
+      read: false
+    });
+
+    await nuevaAlerta.save();
+
+    console.log(`🔔 Nueva alerta creada para usuario ${userId}: ${title}`);
+
+    res.json({
+      mensaje: "Alerta creada correctamente",
+      alerta: nuevaAlerta
+    });
+  } catch (error) {
+    console.error("❌ Error creando alerta:", error);
+    res.status(500).json({ error: "Error al crear alerta" });
+  }
+});
+
+// MARCAR ALERTA COMO LEÍDA
+app.put("/api/alerts/:alertId/read", authenticateToken, async (req, res) => {
+  try {
+    const { alertId } = req.params;
+
+    const alerta = await Alerta.findByIdAndUpdate(
+      alertId,
+      { read: true },
+      { new: true }
+    );
+
+    if (!alerta) {
+      return res.status(404).json({ error: "Alerta no encontrada" });
+    }
+
+    res.json({
+      mensaje: "Alerta marcada como leída",
+      alerta
+    });
+  } catch (error) {
+    console.error("❌ Error actualizando alerta:", error);
+    res.status(500).json({ error: "Error al actualizar alerta" });
+  }
+});
+
+// ELIMINAR ALERTA
+app.delete("/api/alerts/:alertId", authenticateToken, async (req, res) => {
+  try {
+    const { alertId } = req.params;
+
+    const alerta = await Alerta.findByIdAndDelete(alertId);
+
+    if (!alerta) {
+      return res.status(404).json({ error: "Alerta no encontrada" });
+    }
+
+    res.json({
+      mensaje: "Alerta eliminada correctamente"
+    });
+  } catch (error) {
+    console.error("❌ Error eliminando alerta:", error);
+    res.status(500).json({ error: "Error al eliminar alerta" });
+  }
+});
+
+// 📊 ENDPOINTS DE DATOS DE SENSORES
+
+// GUARDAR DATOS DE SENSOR
+app.post("/api/sensor-data", authenticateToken, async (req, res) => {
+  try {
+    const { userId, moisture, temperature, humidity, ph, location, crop } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "UserId es requerido" });
+    }
+
+    const nuevoDato = new SensorData({
+      userId,
+      moisture,
+      temperature,
+      humidity,
+      ph,
+      location,
+      crop,
+      date: new Date()
+    });
+
+    await nuevoDato.save();
+
+    console.log(`📊 Nuevo dato de sensor guardado para usuario ${userId}`);
+
+    res.json({
+      mensaje: "Dato de sensor guardado correctamente",
+      data: nuevoDato
+    });
+  } catch (error) {
+    console.error("❌ Error guardando dato de sensor:", error);
+    res.status(500).json({ error: "Error al guardar dato de sensor" });
+  }
+});
+
+// OBTENER DATOS DE SENSORES DEL USUARIO
+app.get("/api/sensor-data/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit, startDate, endDate } = req.query;
+
+    let query = { userId };
+    
+    // Filtrar por rango de fechas si se proporciona
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) query.date.$gte = new Date(startDate);
+      if (endDate) query.date.$lte = new Date(endDate);
+    }
+
+    let datosQuery = SensorData.find(query).sort({ date: -1 });
+    
+    if (limit) {
+      datosQuery = datosQuery.limit(parseInt(limit));
+    }
+
+    const datos = await datosQuery;
+    
+    res.json(datos);
+  } catch (error) {
+    console.error("❌ Error obteniendo datos de sensor:", error);
+    res.status(500).json({ error: "Error al obtener datos de sensor" });
+  }
+});
+
+// OBTENER ÚLTIMO DATO DE SENSOR
+app.get("/api/sensor-data/:userId/latest", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const ultimoDato = await SensorData.findOne({ userId })
+      .sort({ date: -1 })
+      .limit(1);
+
+    res.json(ultimoDato || {});
+  } catch (error) {
+    console.error("❌ Error obteniendo último dato:", error);
+    res.status(500).json({ error: "Error al obtener último dato" });
+  }
+});
+
+// 🌱 ENDPOINTS DE CULTIVOS
+
+// OBTENER CULTIVOS DEL USUARIO
+app.get("/api/crops/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const cultivos = await Cultivo.find({ userId }).sort({ startDate: -1 });
+    
+    res.json(cultivos);
+  } catch (error) {
+    console.error("❌ Error obteniendo cultivos:", error);
+    res.status(500).json({ error: "Error al obtener cultivos" });
+  }
+});
+
+// CREAR NUEVO CULTIVO
+app.post("/api/crops", authenticateToken, async (req, res) => {
+  try {
+    const { userId, name, type, startDate, estimatedHarvest, location, area, notes } = req.body;
+
+    if (!name || !startDate) {
+      return res.status(400).json({ error: "Nombre y fecha de inicio son requeridos" });
+    }
+
+    const nuevoCultivo = new Cultivo({
+      userId,
+      name,
+      type,
+      startDate: new Date(startDate),
+      estimatedHarvest: estimatedHarvest ? new Date(estimatedHarvest) : undefined,
+      location,
+      area,
+      notes,
+      status: 'active'
+    });
+
+    await nuevoCultivo.save();
+
+    console.log(`🌱 Nuevo cultivo creado: ${name} para usuario ${userId}`);
+
+    res.json({
+      mensaje: "Cultivo creado correctamente",
+      cultivo: nuevoCultivo
+    });
+  } catch (error) {
+    console.error("❌ Error creando cultivo:", error);
+    res.status(500).json({ error: "Error al crear cultivo" });
+  }
+});
+
+// ACTUALIZAR CULTIVO
+app.put("/api/crops/:cropId", authenticateToken, async (req, res) => {
+  try {
+    const { cropId } = req.params;
+    const updateData = req.body;
+
+    // Convertir fechas si están presentes
+    if (updateData.startDate) updateData.startDate = new Date(updateData.startDate);
+    if (updateData.estimatedHarvest) updateData.estimatedHarvest = new Date(updateData.estimatedHarvest);
+
+    const cultivo = await Cultivo.findByIdAndUpdate(
+      cropId,
+      updateData,
+      { new: true }
+    );
+
+    if (!cultivo) {
+      return res.status(404).json({ error: "Cultivo no encontrado" });
+    }
+
+    res.json({
+      mensaje: "Cultivo actualizado correctamente",
+      cultivo
+    });
+  } catch (error) {
+    console.error("❌ Error actualizando cultivo:", error);
+    res.status(500).json({ error: "Error al actualizar cultivo" });
+  }
+});
+
+// 📈 ENDPOINTS DE ESTADÍSTICAS
+
+// OBTENER ESTADÍSTICAS DEL USUARIO
+app.get("/api/stats/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Contar acciones por tipo
+    const accionesPorTipo = await Accion.aggregate([
+      { $match: { userId } },
+      { $group: { _id: "$type", count: { $sum: 1 } } }
+    ]);
+
+    // Obtener datos de sensores de los últimos 7 días
+    const sieteDiasAtras = new Date();
+    sieteDiasAtras.setDate(sieteDiasAtras.getDate() - 7);
+
+    const datosRecientes = await SensorData.find({
+      userId,
+      date: { $gte: sieteDiasAtras }
+    }).sort({ date: 1 });
+
+    // Contar alertas no leídas
+    const alertasNoLeidas = await Alerta.countDocuments({
+      userId,
+      read: false
+    });
+
+    // Obtener cultivos activos
+    const cultivosActivos = await Cultivo.countDocuments({
+      userId,
+      status: 'active'
+    });
+
+    res.json({
+      accionesPorTipo,
+      datosRecientes,
+      alertasNoLeidas,
+      cultivosActivos,
+      totalAcciones: await Accion.countDocuments({ userId }),
+      totalDatosSensor: await SensorData.countDocuments({ userId })
+    });
+  } catch (error) {
+    console.error("❌ Error obteniendo estadísticas:", error);
+    res.status(500).json({ error: "Error al obtener estadísticas" });
+  }
+});
+
+// 🛠️ ENDPOINTS DE UTILIDAD
+
+// HEALTH CHECK
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "OK",
+    message: "Servidor funcionando correctamente",
+    timestamp: new Date(),
+    database: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected"
+  });
+});
+
+// OBTENER INFORMACIÓN DEL USUARIO
+app.get("/api/user/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const usuario = await Usuario.findById(userId);
+    if (!usuario) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    res.json({
+      id: usuario._id,
+      name: usuario.name,
+      email: usuario.email,
+      role: usuario.role,
+      cultivo: usuario.cultivo,
+      ubicacion: usuario.ubicacion,
+      fechaRegistro: usuario.fechaRegistro
+    });
+  } catch (error) {
+    console.error("❌ Error obteniendo información del usuario:", error);
+    res.status(500).json({ error: "Error al obtener información del usuario" });
+  }
+});
+
+// ACTUALIZAR PERFIL DE USUARIO
+app.put("/api/user/:userId", authenticateToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name, cultivo, ubicacion } = req.body;
+
+    const usuario = await Usuario.findByIdAndUpdate(
+      userId,
+      { name, cultivo, ubicacion },
+      { new: true }
+    );
+
+    if (!usuario) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    res.json({
+      mensaje: "Perfil actualizado correctamente",
+      usuario: {
+        id: usuario._id,
+        name: usuario.name,
+        email: usuario.email,
+        role: usuario.role,
+        cultivo: usuario.cultivo,
+        ubicacion: usuario.ubicacion
+      }
+    });
+  } catch (error) {
+    console.error("❌ Error actualizando perfil:", error);
+    res.status(500).json({ error: "Error al actualizar perfil" });
+  }
+});
+
+// 🚀 INICIAR SERVIDOR
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🌍 Servidor corriendo en puerto ${PORT}`);
+  console.log(`📊 Endpoints disponibles:`);
+  console.log(`   POST /api/login`);
+  console.log(`   POST /api/registro`);
+  console.log(`   GET  /api/actions/:userId`);
+  console.log(`   POST /api/actions`);
+  console.log(`   POST /api/actions/sync`);
+  console.log(`   GET  /api/alerts/:userId`);
+  console.log(`   POST /api/alerts`);
+  console.log(`   POST /api/sensor-data`);
+  console.log(`   GET  /api/sensor-data/:userId`);
+  console.log(`   GET  /api/crops/:userId`);
+  console.log(`   GET  /api/stats/:userId`);
+  console.log(`   GET  /api/health`);
+});
+
+// Manejo de errores no capturados
+process.on('unhandledRejection', (err) => {
+  console.error('❌ Error no manejado:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('❌ Excepción no capturada:', err);
+  process.exit(1);
+});
