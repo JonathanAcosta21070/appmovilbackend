@@ -1,4 +1,4 @@
-// models/index.js
+// models/index.js - VERSIÓN CORREGIDA
 const mongoose = require("mongoose");
 
 // Esquema de Usuario
@@ -14,7 +14,11 @@ const UsuarioSchema = new mongoose.Schema({
 
 // Esquema para Cultivos (App Móvil)
 const CultivoSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
+  userId: { 
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Usuario", 
+    required: true 
+  },
   crop: { type: String, required: true },
   location: { type: String, required: true },
   status: { 
@@ -40,27 +44,6 @@ const CultivoSchema = new mongoose.Schema({
     observations: String,
     synced: { type: Boolean, default: true }
   }],
-  createdAt: { type: Date, default: Date.now }
-}, { collection: 'projects' });
-
-// Esquema para Proyectos Web
-const ProjectSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  crop: { type: String, required: true },
-  location: { type: String, required: true },
-  status: { type: String, default: "Activo" },
-  humidity: { type: Number, default: null },
-  bioFertilizer: { type: String, default: null },
-  sowingDate: { type: Date, default: null },
-  observations: { type: String, default: "" },
-  recommendations: { type: String, default: "" },
-  history: [{
-    date: { type: Date, required: true },
-    type: { type: String, required: true },
-    seed: { type: String },
-    action: { type: String }
-  }],
-  synced: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 }, { collection: 'projects' });
 
@@ -102,26 +85,49 @@ const SensorDataSchema = new mongoose.Schema({
   crop: String
 }, { collection: 'sensorData' });
 
-// Esquema para Recomendaciones
+// 🟢 ESQUEMA CORREGIDO: RecomendacionSchema (no RecomendacionSchema)
 const RecomendacionSchema = new mongoose.Schema({
-  farmerId: { type: String, required: true },
-  scientistId: { type: String, required: true },
-  scientistName: { type: String, required: true },
-  cropId: { type: String, default: null },
-  recommendation: { type: String, required: true },
-  priority: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
-  status: { type: String, enum: ['pending', 'completed', 'read'], default: 'pending' },
-  title: { type: String, default: '' },
-  type: { type: String, default: 'agricultural_advice' },
-  date: { type: Date, default: Date.now },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  farmerId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Usuario', 
+    required: true 
+  },
+  cropId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Cultivo' 
+  },
+  recommendation: { 
+    type: String, 
+    required: true 
+  },
+  priority: { 
+    type: String, 
+    enum: ['low', 'medium', 'high'], 
+    default: 'medium' 
+  },
+  scientistId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Usuario', 
+    required: true 
+  },
+  scientistName: { 
+    type: String, 
+    required: true 
+  },
+  status: { 
+    type: String, 
+    enum: ['pending', 'read', 'completed'], 
+    default: 'pending' 
+  },
+  createdAt: { 
+    type: Date, 
+    default: Date.now 
+  }
 }, { collection: 'recommendations' });
 
 // Crear y exportar modelos
 const Usuario = mongoose.model("Usuario", UsuarioSchema);
 const Cultivo = mongoose.model("Cultivo", CultivoSchema);
-const Project = mongoose.model("Project", ProjectSchema);
 const Accion = mongoose.model("Accion", AccionSchema);
 const Alerta = mongoose.model("Alerta", AlertaSchema);
 const SensorData = mongoose.model("SensorData", SensorDataSchema);
@@ -130,7 +136,6 @@ const Recomendacion = mongoose.model("Recomendacion", RecomendacionSchema);
 module.exports = {
   Usuario,
   Cultivo,
-  Project,
   Accion,
   Alerta,
   SensorData,

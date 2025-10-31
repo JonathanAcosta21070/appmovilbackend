@@ -1,12 +1,12 @@
-// routes/farmerRoutes.js
+// routes/farmerRoutes.js - VERSIÓN UNIFICADA
 const express = require("express");
 const mongoose = require("mongoose");
 const router = express.Router();
 
-// ✅ SOLUCIÓN: Usa solo esta línea y elimina las declaraciones individuales
-const { Cultivo, Accion, Alerta, SensorData, Project, Usuario } = require("../models");
+// ✅ SOLO Cultivo - ELIMINADO Project
+const { Cultivo, Accion, Alerta, SensorData, Usuario } = require("../models");
 
-// 🚀 MIDDLEWARE DE AUTENTICACIÓN
+// 🚀 MIDDLEWARE DE AUTENTICACIÓN MEJORADO
 const authenticateToken = async (req, res, next) => {
   try {
     const token = req.headers.authorization;
@@ -14,166 +14,34 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({ error: "Token de autorización requerido" });
     }
     
-    const usuario = await Usuario.findById(token);
+    // ✅ ACEPTAR TANTO OBJECTID COMO STRING
+    let usuario;
+    
+    // Verificar si es un ObjectId válido
+    if (mongoose.Types.ObjectId.isValid(token)) {
+      usuario = await Usuario.findById(token);
+    } else {
+      // Si no es ObjectId, buscar por otro campo (como email)
+      usuario = await Usuario.findOne({ 
+        $or: [
+          { _id: token }, // Por si acaso
+          { email: token }
+        ]
+      });
+    }
+    
     if (!usuario) {
       return res.status(401).json({ error: "Usuario no válido" });
     }
     
-    req.userId = token;
+    req.userId = usuario._id; // ✅ Siempre usar el ObjectId real
     req.user = usuario;
     next();
   } catch (error) {
+    console.error("❌ Error en autenticación:", error);
     res.status(401).json({ error: "Token inválido" });
   }
 };
-
-
-// 🌐 ENDPOINTS PARA SINCRONIZACIÓN WEB-APP
-
-// OBTENER PROYECTOS DE LA WEB Y CONVERTIRLOS A FORMATO APP
-router.get("/web-projects", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.userId;
-    
-    console.log(`🌐 Obteniendo proyectos web para usuario: ${userId}`);
-    
-    // Obtener proyectos de la web
-    const webProjects = await Project.find({ userId })
-      .sort({ createdAt: -1 });
-    
-    console.log(`📋 Proyectos web encontrados: ${webProjects.length}`);
-    
-    // Convertir proyectos web a formato de cultivos de la app
-    const proyectosConvertidos = webProjects.map(proyectoWeb => {
-      return {
-        _id: proyectoWeb._id,
-        userId: proyectoWeb.userId,
-        crop: proyectoWeb.crop,
-        location: proyectoWeb.location,
-        status: proyectoWeb.status || 'Activo',
-        humidity: proyectoWeb.humidity,
-        bioFertilizer: proyectoWeb.bioFertilizer,
-        sowingDate: proyectoWeb.sowingDate,
-        observations: proyectoWeb.observations,
-        recommendations: proyectoWeb.recommendations,
-        history: (proyectoWeb.history || []).map(accion => ({
-          ...accion.toObject?.() || accion,
-          isWebAction: true
-        })),
-        isWebProject: true,
-        synced: true,
-        createdAt: proyectoWeb.createdAt,
-        isLegacy: true
-      };
-    });
-    
-    res.json(proyectosConvertidos);
-    
-  } catch (error) {
-    console.error("❌ Error obteniendo proyectos web:", error);
-    res.status(500).json({ error: "Error al obtener proyectos web" });
-  }
-});
-
-// SINCRONIZAR DATOS COMPLETOS (WEB + APP)
-router.get("/sync-all-data", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.userId;
-    
-    console.log(`🔄 Sincronizando todos los datos para usuario: ${userId}`);
-    
-    // 1. Obtener cultivos de la app
-    const cultivosApp = await Cultivo.find({ userId })
-      .sort({ createdAt: -1 });
-    
-    // 2. Obtener proyectos de la web
-    const proyectosWeb = await Project.find({ userId })
-      .sort({ createdAt: -1 });
-    
-    // 3. Convertir proyectos web a formato unificado
-    const proyectosConvertidos = proyectosWeb.map(proyectoWeb => {
-      return {
-        _id: proyectoWeb._id,
-        userId: proyectoWeb.userId,
-        crop: proyectoWeb.crop,
-        location: proyectoWeb.location,
-        status: proyectoWeb.status || 'Activo',
-        humidity: proyectoWeb.humidity,
-        bioFertilizer: proyectoWeb.bioFertilizer,
-        sowingDate: proyectoWeb.sowingDate,
-        observations: proyectoWeb.observations,
-        recommendations: proyectoWeb.recommendations,
-        history: (proyectoWeb.history || []).map(accion => ({
-          ...accion.toObject?.() || accion,
-          isWebAction: true
-        })),
-        isWebProject: true,
-        synced: true,
-        createdAt: proyectoWeb.createdAt,
-        isLegacy: true
-      };
-    });
-    
-    // 4. Combinar todos los datos
-    const todosLosDatos = [...cultivosApp, ...proyectosConvertidos];
-    
-    console.log(`✅ Sincronización completada: ${cultivosApp.length} app + ${proyectosWeb.length} web = ${todosLosDatos.length} total`);
-    
-    res.json({
-      mensaje: "Datos sincronizados correctamente",
-      datos: todosLosDatos,
-      resumen: {
-        total: todosLosDatos.length,
-        desdeApp: cultivosApp.length,
-        desdeWeb: proyectosWeb.length,
-        ultimaSincronizacion: new Date()
-      }
-    });
-    
-  } catch (error) {
-    console.error("❌ Error en sincronización completa:", error);
-    res.status(500).json({ error: "Error al sincronizar datos" });
-  }
-});
-
-// CREAR PROYECTO DESDE LA APP (compatibilidad bidireccional)
-router.post("/web-projects", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.userId;
-    const { crop, location, status, humidity, bioFertilizer, sowingDate, observations, recommendations, history } = req.body;
-
-    if (!crop || !location) {
-      return res.status(400).json({ error: "Cultivo y ubicación son requeridos" });
-    }
-
-    const nuevoProyectoWeb = new Project({
-      userId,
-      crop,
-      location,
-      status: status || 'Activo',
-      humidity: humidity || null,
-      bioFertilizer: bioFertilizer || '',
-      sowingDate: sowingDate || new Date(),
-      observations: observations || '',
-      recommendations: recommendations || '',
-      history: history || [],
-      synced: true
-    });
-
-    await nuevoProyectoWeb.save();
-
-    console.log(`🌐 Nuevo proyecto web creado desde app: ${crop}`);
-
-    res.json({
-      mensaje: "Proyecto web creado correctamente",
-      proyecto: nuevoProyectoWeb
-    });
-    
-  } catch (error) {
-    console.error("❌ Error creando proyecto web:", error);
-    res.status(500).json({ error: "Error al crear proyecto web" });
-  }
-});
 
 // 🗑️ ELIMINAR UNA ACCIÓN DEL HISTORIAL DE UN CULTIVO
 router.delete('/crops/:cropId/history/:actionId', authenticateToken, async (req, res) => {
@@ -327,58 +195,24 @@ router.get("/sensor-data", authenticateToken, async (req, res) => {
   }
 });
 
-// 🌱 ENDPOINTS DE CULTIVOS MEJORADOS
+// 🌱 ENDPOINTS DE CULTIVOS UNIFICADOS
 
-// OBTENER TODOS LOS CULTIVOS DEL USUARIO ACTUAL (INCLUYENDO ACCIONES WEB)
+// OBTENER TODOS LOS CULTIVOS DEL USUARIO ACTUAL
 router.get("/crops", authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
     
-    console.log(`🌱 Obteniendo datos combinados para usuario: ${userId}`);
+    console.log(`🌱 Obteniendo cultivos para usuario: ${userId}`);
     
-    // 1. Obtener cultivos nuevos (sistema actual)
+    // ✅ SOLO UN MODELO - Cultivo
     const cultivos = await Cultivo.find({ userId })
       .sort({ createdAt: -1 });
     
-    console.log(`📊 Cultivos nuevos encontrados: ${cultivos.length}`);
+    console.log(`📊 Cultivos encontrados: ${cultivos.length}`);
 
-    // 2. Obtener proyectos web
-    const proyectosWeb = await Project.find({ userId }).sort({ createdAt: -1 });
-    
-    console.log(`📝 Proyectos web encontrados: ${proyectosWeb.length}`);
-
-    // 3. Convertir proyectos web a formato de cultivos
-    const cultivosDeWeb = proyectosWeb.map(proyectoWeb => {
-      return {
-        _id: proyectoWeb._id,
-        userId: proyectoWeb.userId,
-        crop: proyectoWeb.crop,
-        location: proyectoWeb.location,
-        status: proyectoWeb.status || 'Activo',
-        humidity: proyectoWeb.humidity,
-        bioFertilizer: proyectoWeb.bioFertilizer,
-        sowingDate: proyectoWeb.sowingDate,
-        observations: proyectoWeb.observations,
-        recommendations: proyectoWeb.recommendations,
-        history: (proyectoWeb.history || []).map(accion => ({
-          ...accion.toObject?.() || accion,
-          isWebAction: true
-        })),
-        isWebProject: true,
-        synced: true,
-        createdAt: proyectoWeb.createdAt,
-        isLegacy: true
-      };
-    });
-
-    // 4. Combinar cultivos nuevos con cultivos de web
-    const todosLosCultivos = [...cultivos, ...cultivosDeWeb];
-    
-    console.log(`✅ Datos combinados: ${cultivos.length} cultivos + ${cultivosDeWeb.length} de web = ${todosLosCultivos.length} total`);
-
-    res.json(todosLosCultivos);
+    res.json(cultivos);
   } catch (error) {
-    console.error("❌ Error obteniendo datos combinados:", error);
+    console.error("❌ Error obteniendo cultivos:", error);
     res.status(500).json({ error: "Error al obtener datos" });
   }
 });
@@ -414,23 +248,34 @@ router.post("/crops", authenticateToken, async (req, res) => {
       bioFertilizer, 
       observations, 
       recommendations,
-      humidity 
+      humidity,
+      status = 'Activo' // Permitir actualizar estado
     } = req.body;
 
     if (!crop || !location) {
       return res.status(400).json({ error: "Cultivo y ubicación son requeridos" });
     }
 
-    // Buscar si ya existe un cultivo activo con el mismo nombre y ubicación
+    // 🔍 BUSCAR CULTIVO EXISTENTE - MEJORADO
+    // Normalizar nombres para evitar diferencias por espacios/mayúsculas
+    const normalizedCrop = crop.trim().toLowerCase();
+    const normalizedLocation = location.trim().toLowerCase();
+
     let cultivoExistente = await Cultivo.findOne({ 
       userId, 
-      crop, 
-      location, 
-      status: 'Activo' 
+      $expr: {
+        $and: [
+          { $eq: [{ $toLower: "$crop" }, normalizedCrop] },
+          { $eq: [{ $toLower: "$location" }, normalizedLocation] }
+        ]
+      },
+      status: 'Activo' // Solo cultivos activos
     });
 
     if (cultivoExistente) {
-      // 🔄 AGREGAR ACCIÓN AL HISTORIAL DEL CULTIVO EXISTENTE
+      console.log(`🔄 Cultivo existente encontrado: ${cultivoExistente._id}`);
+      
+      // 📝 CREAR NUEVA ACCIÓN PARA EL HISTORIAL
       const nuevaAccion = {
         date: new Date(),
         type: actionType || 'other',
@@ -438,25 +283,36 @@ router.post("/crops", authenticateToken, async (req, res) => {
         action: generarDescripcionAccion(actionType, seed, bioFertilizer),
         bioFertilizer: bioFertilizer || '',
         observations: observations || '',
-        synced: true
+        synced: true,
+        _id: new mongoose.Types.ObjectId() // ✅ ID único para cada acción
       };
 
-      cultivoExistente.history.push(nuevaAccion);
+      // 🔄 AGREGAR AL HISTORIAL (al inicio para mantener orden cronológico)
+      cultivoExistente.history.unshift(nuevaAccion);
       
-      // Actualizar campos si se proporcionan
-      if (humidity) cultivoExistente.humidity = humidity;
+      // 📊 ACTUALIZAR CAMPOS DEL CULTIVO SI SE PROPORCIONAN
+      if (humidity !== undefined) cultivoExistente.humidity = humidity;
       if (bioFertilizer) cultivoExistente.bioFertilizer = bioFertilizer;
-      if (observations) cultivoExistente.observations = observations;
+      if (observations) {
+        cultivoExistente.observations = observations;
+      }
       if (recommendations) cultivoExistente.recommendations = recommendations;
+      if (status) cultivoExistente.status = status;
+
+      // 📅 Actualizar fecha de siembra si es una acción de siembra
+      if (actionType === 'sowing') {
+        cultivoExistente.sowingDate = new Date();
+      }
 
       await cultivoExistente.save();
 
-      console.log(`✅ Acción agregada a cultivo existente: ${crop} para usuario ${userId}`);
+      console.log(`✅ Acción agregada a cultivo existente: ${crop} en ${location}`);
 
       res.json({
         mensaje: "Acción agregada al cultivo existente",
         cultivo: cultivoExistente,
-        accion: nuevaAccion
+        accion: nuevaAccion,
+        tipo: "accion_agregada"
       });
 
     } else {
@@ -468,13 +324,14 @@ router.post("/crops", authenticateToken, async (req, res) => {
         action: generarDescripcionAccion(actionType || 'sowing', seed, bioFertilizer),
         bioFertilizer: bioFertilizer || '',
         observations: observations || '',
-        synced: true
+        synced: true,
+        _id: new mongoose.Types.ObjectId()
       };
 
       const nuevoCultivo = new Cultivo({
         userId,
-        crop,
-        location,
+        crop: crop.trim(), // Limpiar espacios
+        location: location.trim(), // Limpiar espacios
         status: 'Activo',
         humidity: humidity || null,
         bioFertilizer: bioFertilizer || '',
@@ -486,11 +343,12 @@ router.post("/crops", authenticateToken, async (req, res) => {
 
       await nuevoCultivo.save();
 
-      console.log(`🌱 Nuevo cultivo creado: ${crop} para usuario ${userId}`);
+      console.log(`🌱 Nuevo cultivo creado: ${crop} en ${location}`);
 
       res.json({
         mensaje: "Cultivo creado correctamente",
-        cultivo: nuevoCultivo
+        cultivo: nuevoCultivo,
+        tipo: "nuevo_cultivo"
       });
     }
   } catch (error) {
