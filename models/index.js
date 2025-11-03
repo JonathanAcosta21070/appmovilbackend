@@ -24,7 +24,7 @@ const CultivoSchema = new mongoose.Schema({
   status: { 
     type: String, 
     default: 'Activo', 
-    enum: ['Activo', 'Cosechado', 'Abandonado'] 
+    enum: ['Activo', 'En reposo', 'Cosechado', 'Abandonado'] // ✅ Agregar 'En reposo'
   },
   humidity: Number,
   bioFertilizer: String,
@@ -36,7 +36,7 @@ const CultivoSchema = new mongoose.Schema({
     type: { 
       type: String, 
       required: true, 
-      enum: ['sowing', 'watering', 'fertilization', 'harvest', 'pruning', 'other'] 
+      enum: ['sowing', 'watering', 'fertilization', 'harvest', 'pruning', 'status_change', 'other'] // ✅ Agregar 'status_change'
     },
     seed: String,
     action: String,

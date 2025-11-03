@@ -1,10 +1,11 @@
-// routes/farmerRoutes.js - VERSIÓN UNIFICADA
+// routes/farmerRoutes.js - CORREGIR IMPORTACIÓN
+
 const express = require("express");
 const mongoose = require("mongoose");
 const router = express.Router();
 
-// ✅ SOLO Cultivo - ELIMINADO Project
-const { Cultivo, Accion, Alerta, SensorData, Usuario } = require("../models");
+// ✅ AGREGAR Recomendacion A LA IMPORTACIÓN
+const { Cultivo, Accion, Alerta, SensorData, Usuario, Recomendacion } = require("../models");
 
 // 🚀 MIDDLEWARE DE AUTENTICACIÓN MEJORADO
 const authenticateToken = async (req, res, next) => {
@@ -138,26 +139,161 @@ router.post("/actions", authenticateToken, async (req, res) => {
 
 // 🔔 ENDPOINTS DE ALERTAS
 
-// OBTENER ALERTAS DEL USUARIO ACTUAL
+// OBTENER RECOMENDACIONES DEL USUARIO ACTUAL
 router.get("/alerts", authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
     const { unreadOnly } = req.query;
 
-    console.log(`🔔 Obteniendo alertas para usuario: ${userId}`);
+    console.log(`🔔 Obteniendo recomendaciones para usuario: ${userId}`);
     
-    let query = { userId };
+    let query = { farmerId: userId }; // ✅ Cambiar userId por farmerId
+    
     if (unreadOnly === 'true') {
-      query.read = false;
+      query.status = 'pending'; // ✅ Cambiar read por status
     }
 
-    const alertas = await Alerta.find(query).sort({ date: -1 });
+    // ✅ USAR EL MODELO RECOMENDACION
+    const recomendaciones = await Recomendacion.find(query)
+      .sort({ createdAt: -1 })
+      .populate('cropId', 'crop location'); // ✅ Populate para obtener info del cultivo
+
+    console.log(`✅ Encontradas ${recomendaciones.length} recomendaciones para usuario ${userId}`);
     
-    console.log(`✅ Encontradas ${alertas.length} alertas para usuario ${userId}`);
-    res.json(alertas);
+    // ✅ TRANSFORMAR AL FORMATO QUE ESPERA EL FRONTEND
+    const alertasTransformadas = recomendaciones.map(rec => ({
+      _id: rec._id,
+      id: rec._id.toString(), // Para compatibilidad
+      title: `Recomendación de ${rec.scientistName}`,
+      message: rec.recommendation,
+      type: rec.priority === 'high' ? 'warning' : 
+            rec.priority === 'medium' ? 'info' : 'success',
+      from: rec.scientistName,
+      date: rec.createdAt,
+      read: rec.status !== 'pending',
+      priority: rec.priority,
+      crop: rec.cropId ? `${rec.cropId.crop} - ${rec.cropId.location}` : 'General',
+      status: rec.status,
+      scientistName: rec.scientistName,
+      createdAt: rec.createdAt
+    }));
+
+    console.log('📋 Primeras 2 recomendaciones transformadas:', 
+      alertasTransformadas.slice(0, 2).map(a => ({
+        id: a.id,
+        title: a.title,
+        message: a.message.substring(0, 50) + '...',
+        crop: a.crop
+      }))
+    );
+
+    res.json(alertasTransformadas);
   } catch (error) {
-    console.error("❌ Error obteniendo alertas:", error);
-    res.status(500).json({ error: "Error al obtener alertas" });
+    console.error("❌ Error obteniendo recomendaciones:", error);
+    res.status(500).json({ 
+      error: "Error al obtener recomendaciones",
+      detalle: error.message 
+    });
+  }
+});
+
+// 📖 MARCAR RECOMENDACIÓN COMO LEÍDA
+router.put('/alerts/:alertId/read', authenticateToken, async (req, res) => {
+  try {
+    const { alertId } = req.params;
+    const userId = req.userId;
+
+    console.log(`📖 Marcando como leída la recomendación ${alertId}`);
+
+    // ✅ VERIFICAR SI EL ID ES VÁLIDO
+    if (!mongoose.Types.ObjectId.isValid(alertId)) {
+      return res.status(400).json({ 
+        error: "ID de recomendación no válido" 
+      });
+    }
+
+    const result = await Recomendacion.updateOne(
+      { 
+        _id: alertId, 
+        farmerId: userId 
+      },
+      { 
+        status: 'read' 
+      }
+    );
+
+    console.log('📊 Resultado de marcar como leída:', result);
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({ 
+        error: "Recomendación no encontrada" 
+      });
+    }
+
+    console.log("✅ Recomendación marcada como leída");
+    res.json({ 
+      mensaje: "Recomendación marcada como leída",
+      alertaId: alertId 
+    });
+
+  } catch (error) {
+    console.error("❌ Error marcando como leída:", error);
+    res.status(500).json({ 
+      error: "Error al marcar como leída",
+      detalle: error.message 
+    });
+  }
+});
+
+// 🗑️ ELIMINAR UNA RECOMENDACIÓN ESPECÍFICA
+router.delete('/alerts/:alertId', authenticateToken, async (req, res) => {
+  try {
+    const { alertId } = req.params;
+    const userId = req.userId;
+
+    console.log(`🗑️ Eliminando recomendación ${alertId} del usuario ${userId}`);
+
+    // ✅ VERIFICAR SI EL ID ES VÁLIDO
+    if (!mongoose.Types.ObjectId.isValid(alertId)) {
+      return res.status(400).json({ 
+        error: "ID de recomendación no válido" 
+      });
+    }
+
+    // ✅ USAR EL MODELO RECOMENDACION
+    const result = await Recomendacion.deleteOne({ 
+      _id: alertId, 
+      farmerId: userId 
+    });
+
+    console.log('📊 Resultado de eliminación:', result);
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        error: "Recomendación no encontrada o no pertenece al usuario" 
+      });
+    }
+
+    console.log("✅ Recomendación eliminada correctamente de MongoDB");
+    res.json({ 
+      mensaje: "Recomendación eliminada correctamente",
+      alertaId: alertId 
+    });
+
+  } catch (error) {
+    console.error("❌ Error al eliminar recomendación:", error);
+    
+    // Más detalles del error
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        error: "ID de recomendación con formato incorrecto" 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: "Error al eliminar la recomendación",
+      detalle: error.message 
+    });
   }
 });
 
@@ -218,24 +354,41 @@ router.get("/crops", authenticateToken, async (req, res) => {
 });
 
 // OBTENER UN CULTIVO ESPECÍFICO
-router.get("/crops/:cropId", authenticateToken, async (req, res) => {
+router.put("/crops/:cropId", authenticateToken, async (req, res) => {
   try {
     const { cropId } = req.params;
     const userId = req.userId;
+    const { status, observations, recommendations, humidity } = req.body;
 
-    const cultivo = await Cultivo.findOne({ _id: cropId, userId });
-    
+    console.log(`🔄 Actualizando cultivo ${cropId} para usuario ${userId}`);
+    console.log(`📊 Nuevo estado: ${status}`);
+
+    const cultivo = await Cultivo.findOneAndUpdate(
+      { _id: cropId, userId },
+      { 
+        status: status || 'Activo',
+        observations,
+        recommendations, 
+        humidity
+      },
+      { new: true }
+    );
+
     if (!cultivo) {
       return res.status(404).json({ error: "Cultivo no encontrado" });
     }
 
-    res.json(cultivo);
+    console.log(`✅ Cultivo actualizado correctamente: ${cultivo.crop} - ${cultivo.status}`);
+
+    res.json({
+      mensaje: "Cultivo actualizado correctamente",
+      cultivo
+    });
   } catch (error) {
-    console.error("❌ Error obteniendo cultivo:", error);
-    res.status(500).json({ error: "Error al obtener cultivo" });
+    console.error("❌ Error actualizando cultivo:", error);
+    res.status(500).json({ error: "Error al actualizar cultivo" });
   }
 });
-
 // CREAR NUEVO CULTIVO O AGREGAR ACCIÓN A CULTIVO EXISTENTE
 router.post("/crops", authenticateToken, async (req, res) => {
   try {
